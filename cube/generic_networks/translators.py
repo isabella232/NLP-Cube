@@ -121,13 +121,13 @@ class BRNNMT:
     def learn(self, src, dst):
         softmax_list, aux_list = self._predict(src, dst=dst,  num_predictions=len(dst) + 1, runtime=False)
         for softmax, aux, entry in zip(softmax_list, aux_list, dst):
-            word = entry.word.decode('utf-8').lower()
+            word = entry.word.lower()
             if word in self.output_encodings.word2int:
                 w_index = self.output_encodings.word2int[word]
             else:
                 w_index = self.output_encodings.word2int["<UNK>"]
 
-            w_emb, found = self.dst_we.get_word_embeddings(entry.word.decode('utf-8'))
+            w_emb, found = self.dst_we.get_word_embeddings(entry.word)
             self.losses.append(-dy.log(dy.pick(softmax, w_index)))
             if found:
                 vec1=aux
@@ -144,12 +144,12 @@ class BRNNMT:
         w_emb_zero = dy.inputVector([0] * self.src_we.word_embeddings_size)
 
         for entry in list:
-            w_emb, found = self.src_we.get_word_embeddings(entry.word.decode('utf-8'))
+            w_emb, found = self.src_we.get_word_embeddings(entry.word)
             if not found:
                 w_emb = w_emb_zero
             else:
                 w_emb = dy.inputVector(w_emb)
-            word = entry.word.decode('utf-8').lower()
+            word = entry.word.lower()
             if word in self.input_encodings.word2int:
                 hol_emb = self.hol_we_src[self.input_encodings.word2int[word]]
             else:
@@ -223,7 +223,7 @@ class BRNNMT:
                 last_dst_we=self.hol_we_dst[out_we_index]
             else:
                 if pred_index<len(dst):
-                    last_word=dst[pred_index].word.decode('utf-8').lower()
+                    last_word=dst[pred_index].word.lower()
                     last_word_index=self.output_encodings.word2int['<UNK>']
                     if last_word in self.output_encodings.word2int:
                         last_word_index=self.output_encodings.word2int[last_word]
