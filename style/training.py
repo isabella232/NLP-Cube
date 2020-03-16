@@ -3,7 +3,7 @@ Runs a model on a single node across N-gpus.
 """
 import os
 
-from bert_classifier import BERTClassifier
+from model import StyleEstimator
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from test_tube import HyperOptArgumentParser
@@ -18,7 +18,7 @@ def main(hparams) -> None:
     # ------------------------
     # 1 INIT LIGHTNING MODEL
     # ------------------------
-    model = BERTClassifier(hparams)
+    model = StyleEstimator(hparams)
 
     # ------------------------
     # 2 INIT EARLY STOPPING
@@ -135,7 +135,7 @@ if __name__ == "__main__":
     )
 
     # gpu args
-    parser.add_argument("--gpus", type=int, default=2, help="How many gpus")
+    parser.add_argument("--gpus", type=int, default=0, help="How many gpus")
     parser.add_argument(
         "--distributed_backend",
         type=str,
@@ -165,7 +165,7 @@ if __name__ == "__main__":
     )
 
     # each LightningModule defines arguments relevant to it
-    parser = BERTClassifier.add_model_specific_args(parser)
+    parser = StyleEstimator.add_model_specific_args(parser)
     hparams = parser.parse_args()
 
     # ---------------------

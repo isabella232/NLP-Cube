@@ -10,15 +10,12 @@ from torch.utils.data import DataLoader, RandomSampler
 from transformers import BertModel, get_constant_schedule_with_warmup
 
 import pytorch_lightning as pl
-from bert_tokenizer import BERTTextEncoder
 from dataloader import sentiment_analysis_dataset
 from test_tube import HyperOptArgumentParser
-from torchnlp.encoders import LabelEncoder
-from torchnlp.utils import collate_tensors, lengths_to_mask
 from utils import mask_fill
 
 
-class BERTClassifier(pl.LightningModule):
+class StyleEstimator(pl.LightningModule):
     """
     Sample model to show how to use BERT to classify sentences.
     
@@ -26,65 +23,39 @@ class BERTClassifier(pl.LightningModule):
     """
 
     def __init__(self, hparams) -> None:
-        super(BERTClassifier, self).__init__()
+        super(StyleEstimator, self).__init__()
         self.hparams = hparams
         self.batch_size = hparams.batch_size
 
         # build model
-        self.__build_model()
+
+        """
+            Creates an Encoder model.
+            Args:
+                vocab_size (int): Number of classes/ Vocabulary size.
+                emb_dim (int): Embeddings dimension.
+                hidden_dim (int): LSTM hidden layer dimension.
+                num_layers (int): Number of LSTM layers.
+                lstm_dropout (float): LSTM dropout.
+                dropout (float): Embeddings dropout.
+                device : The device to run the model on.
+        """
+
+        super().__init__()
+
+        self.vocab_size = 10000
+        self.emb_dim = 300
+        self.hidden_dim = 512
+        self.num_layers = 3
+
+        self.embedding = nn.Embedding(self.vocab_size, self.emb_dim)
+        self.dropout = nn.Dropout(0.2)
+        self.lstm = nn.LSTM(self.emb_dim, int(self.hidden_dim / 2), self.num_layers, dropout=0.2, bidirectional=True,
+                            batch_first=True)
 
         # Loss criterion initialization.
-        self.__build_loss()
+        self._loss = nn.CrossEntropyLoss(reduction="sum")
 
-        if hparams.nr_frozen_epochs > 0:
-            self._frozen = True
-            self.freeze_encoder()
-        else:
-            self._frozen = False
-        self.nr_frozen_epochs = hparams.nr_frozen_epochs
-
-    def __build_model(self) -> None:
-        """ Init BERT model + tokenizer + classification head."""
-        self.bert = BertModel.from_pretrained(
-            "bert-base-uncased", output_hidden_states=True
-        )
-
-        # Tokenizer
-        self.tokenizer = BERTTextEncoder("bert-base-uncased")
-
-        # Label Encoder
-        self.label_set = {"neg": 0, "pos": 1}
-        self.label_encoder = LabelEncoder(
-            list(self.label_set.keys()), reserved_labels=[]
-        )
-
-        # Classification head
-        self.classification_head = nn.Sequential(
-            nn.Dropout(self.hparams.dropout),
-            nn.Linear(768, self.label_encoder.vocab_size),
-        )
-
-    def __build_loss(self):
-        """ Initializes the loss function/s. """
-        if self.hparams.class_weights != "ignore":
-            weights = [float(x) for x in self.hparams.class_weights.split(",")]
-            self._loss = nn.CrossEntropyLoss(
-                weight=torch.tensor(weights, dtype=torch.float32), reduction="sum"
-            )
-        else:
-            self._loss = nn.CrossEntropyLoss(reduction="sum")
-
-    def unfreeze_encoder(self) -> None:
-        """ un-freezes the encoder layer. """
-        if self._frozen:
-            log.info(f"\n-- Encoder model fine-tuning")
-            for param in self.bert.parameters():
-                param.requires_grad = True
-
-    def freeze_encoder(self) -> None:
-        """ freezes the encoder layer. """
-        for param in self.bert.parameters():
-            param.requires_grad = False
 
     def forward(self, tokens, lengths):
         """ Usual pytorch forward function.
@@ -94,22 +65,32 @@ class BERTClassifier(pl.LightningModule):
         Returns:
             Dictionary with model outputs (e.g: logits)
         """
-        tokens = tokens[:, : lengths.max()]
-        # When using just one GPU this should not change behavior
-        # but when splitting batches across GPU the tokens have padding
-        # from the entire original batch
-        mask = lengths_to_mask(lengths, device=tokens.device)
+        """
+                Args:
+                    input (tensor): The input of the encoder. It must be a 2-D tensor of integers. 
+                        Shape: [batch_size, seq_len_enc].
+                Returns:
+                    A tuple containing the output and the states of the last LSTM layer. The states of the LSTM layer is also a
+                    tuple that contains the hidden and the cell state, respectively . 
+                        Output shape:            [batch_size, seq_len_enc, hidden_dim * 2]
+                        Hidden/cell state shape: [num_layers*2, batch_size, hidden_dim]
+                """
 
-        # Run BERT model.
-        word_embeddings, _, _ = self.bert(tokens, mask)
+        X, X_lengths = input_tuple[0], input_tuple[1]
 
-        # Average Pooling
-        word_embeddings = mask_fill(
-            0.0, tokens, word_embeddings, self.tokenizer.padding_index
-        )
-        sentemb = torch.sum(word_embeddings, 1)
-        sum_mask = mask.unsqueeze(-1).expand(word_embeddings.size()).float().sum(1)
-        sentemb = sentemb / sum_mask
+        # Creates the embeddings and adds dropout. [batch_size, seq_len] -> [batch_size, seq_len, emb_dim].
+        embeddings = self.dropout(self.embedding(X))
+
+        # pack padded sequences
+        pack_padded_lstm_input = torch.nn.utils.rnn.pack_padded_sequence(embeddings, X_lengths, batch_first=True)
+
+        # now run through LSTM
+        pack_padded_lstm_output, states = self.lstm(pack_padded_lstm_input)
+
+        # undo the packing operation
+        output, _ = torch.nn.utils.rnn.pad_packed_sequence(pack_padded_lstm_output, batch_first=True)
+
+        return {'output': output, 'states': states}
 
         return {"logits": self.classification_head(sentemb)}
 
@@ -243,19 +224,7 @@ class BERTClassifier(pl.LightningModule):
         return result
 
     def configure_optimizers(self):
-        """ Sets different Learning rates for different parameter groups. """
-        parameters = [
-            {"params": self.classification_head.parameters()},
-            {
-                "params": self.bert.parameters(),
-                "lr": self.hparams.encoder_learning_rate,
-            },
-        ]
-        optimizer = optim.Adam(parameters, lr=self.hparams.learning_rate)
-        scheduler = get_constant_schedule_with_warmup(
-            optimizer, self.hparams.warmup_steps
-        )
-        return [optimizer], []
+        return torch.optim.Adam(self.parameters(), lr=0.02)
 
     def on_epoch_end(self):
         """ Pytorch lightning hook """
@@ -266,7 +235,7 @@ class BERTClassifier(pl.LightningModule):
         """ Retrieves task specific dataset """
         return sentiment_analysis_dataset(self.hparams, train, val, test)
 
-    @pl.data_loader
+
     def train_dataloader(self) -> DataLoader:
         """ Function that loads the train set. """
         self._train_dataset = self.__retrieve_dataset(val=False, test=False)[0]
@@ -278,7 +247,7 @@ class BERTClassifier(pl.LightningModule):
             num_workers=self.hparams.loader_workers,
         )
 
-    @pl.data_loader
+
     def val_dataloader(self) -> DataLoader:
         """ Function that loads the validation set. """
         self._dev_dataset = self.__retrieve_dataset(train=False, test=False)[0]
@@ -289,7 +258,7 @@ class BERTClassifier(pl.LightningModule):
             num_workers=self.hparams.loader_workers,
         )
 
-    @pl.data_loader
+
     def test_dataloader(self) -> DataLoader:
         """ Function that loads the validation set. """
         self._test_dataset = self.__retrieve_dataset(train=False, val=False)[0]

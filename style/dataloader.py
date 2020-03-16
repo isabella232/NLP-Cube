@@ -2,7 +2,6 @@
 import pandas as pd
 
 from test_tube import HyperOptArgumentParser
-from torchnlp.datasets.dataset import Dataset
 
 
 def collate_lists(text: list, label: list) -> dict:
