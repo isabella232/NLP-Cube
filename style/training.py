@@ -93,18 +93,18 @@ if __name__ == "__main__":
     )
     # Early Stopping
     parser.add_argument(
-        "--monitor", default="val_acc", type=str, help="Quantity to monitor."
+        "--monitor", default="val_loss", type=str, help="Quantity to monitor."
     )
     parser.add_argument(
         "--metric_mode",
-        default="max",
+        default="min",
         type=str,
         help="If we want to min/max the monitored quantity.",
         choices=["auto", "min", "max"],
     )
     parser.add_argument(
         "--patience",
-        default=1,
+        default=3,
         type=int,
         help="Number of epochs with no improvement \
             after which training will be stopped.",
@@ -117,14 +117,14 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--max_epochs",
-        default=2,
+        default=20,
         type=int,
         help="Limits training to a max number number of epochs",
     )
 
     # Batching
     parser.add_argument(
-        "--batch_size", default=16, type=int, help="Batch size to be used."
+        "--batch_size", default=1, type=int, help="Batch size to be used."
     )
     parser.add_argument(
         "--accumulate_grad_batches",

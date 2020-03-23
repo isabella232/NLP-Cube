@@ -8,9 +8,9 @@ import torch.nn as nn
 from torch import optim
 from torch.utils.data import DataLoader, RandomSampler
 from transformers import BertModel, get_constant_schedule_with_warmup
-
+from lookup import Lookup
 import pytorch_lightning as pl
-from dataloader import sentiment_analysis_dataset
+from dataloader import MyDataset
 from test_tube import HyperOptArgumentParser
 from utils import mask_fill
 
@@ -27,124 +27,200 @@ class StyleEstimator(pl.LightningModule):
         self.hparams = hparams
         self.batch_size = hparams.batch_size
 
+        self.lookup = Lookup(type="bpe")
+        self.lookup.load(file_prefix="lookup/bpe/tok")
+
         # build model
-
-        """
-            Creates an Encoder model.
-            Args:
-                vocab_size (int): Number of classes/ Vocabulary size.
-                emb_dim (int): Embeddings dimension.
-                hidden_dim (int): LSTM hidden layer dimension.
-                num_layers (int): Number of LSTM layers.
-                lstm_dropout (float): LSTM dropout.
-                dropout (float): Embeddings dropout.
-                device : The device to run the model on.
-        """
-
-        super().__init__()
 
         self.vocab_size = 10000
         self.emb_dim = 300
         self.hidden_dim = 512
         self.num_layers = 3
+        self.output_dim = 10
 
         self.embedding = nn.Embedding(self.vocab_size, self.emb_dim)
         self.dropout = nn.Dropout(0.2)
-        self.lstm = nn.LSTM(self.emb_dim, int(self.hidden_dim / 2), self.num_layers, dropout=0.2, bidirectional=True,
+        self.sentence_lstm = nn.LSTM(self.emb_dim, int(self.hidden_dim / 2), self.num_layers, dropout=0.2, bidirectional=True,
                             batch_first=True)
+        self.instance_lstm = nn.LSTM(self.hidden_dim, int(self.hidden_dim / 2), self.num_layers, dropout=0.2,
+                                     bidirectional=True,
+                                     batch_first=True)
+        self.instance_mlp = nn.Linear(self.hidden_dim, self.output_dim)
 
         # Loss criterion initialization.
-        self._loss = nn.CrossEntropyLoss(reduction="sum")
+        self._loss = nn.MSELoss()
 
+    def forward(self, x_tensor, x_lengths):
+        #batch_output = torch.zeros(len(inputs), self.output_dim) # [batch_size, output_size]
+        batch_output = []
+        # x_tensor is a [batch_size, no_sentences, max_len]
+        # x_lengths is a [batch_size * no_sentences]
 
-    def forward(self, tokens, lengths):
-        """ Usual pytorch forward function.
-        :param tokens: text sequences [batch_size x src_seq_len]
-        :param lengths: source lengths [batch_size]
+        batch_size = x_tensor.size(0)
+        no_sentences = x_tensor.size(1)
+        max_len = x_tensor.size(2)
 
-        Returns:
-            Dictionary with model outputs (e.g: logits)
-        """
-        """
-                Args:
-                    input (tensor): The input of the encoder. It must be a 2-D tensor of integers. 
-                        Shape: [batch_size, seq_len_enc].
-                Returns:
-                    A tuple containing the output and the states of the last LSTM layer. The states of the LSTM layer is also a
-                    tuple that contains the hidden and the cell state, respectively . 
-                        Output shape:            [batch_size, seq_len_enc, hidden_dim * 2]
-                        Hidden/cell state shape: [num_layers*2, batch_size, hidden_dim]
-                """
-
-        X, X_lengths = input_tuple[0], input_tuple[1]
-
-        # Creates the embeddings and adds dropout. [batch_size, seq_len] -> [batch_size, seq_len, emb_dim].
-        embeddings = self.dropout(self.embedding(X))
+        # process sentences together
+        #print(x_tensor.size())
+        x = x_tensor.view(-1, max_len) # [batch_size * no_sentences, max_len]
+        embeddings = self.dropout(self.embedding(x))  # [batch_size * no_sentences, max_len, emb_dim]
 
         # pack padded sequences
-        pack_padded_lstm_input = torch.nn.utils.rnn.pack_padded_sequence(embeddings, X_lengths, batch_first=True)
+        pack_padded_lstm_input = torch.nn.utils.rnn.pack_padded_sequence(embeddings, x_lengths, batch_first=True,
+                                                                         enforce_sorted=False)
 
         # now run through LSTM
-        pack_padded_lstm_output, states = self.lstm(pack_padded_lstm_input)
+        pack_padded_lstm_output, _ = self.sentence_lstm(pack_padded_lstm_input)
 
         # undo the packing operation
         output, _ = torch.nn.utils.rnn.pad_packed_sequence(pack_padded_lstm_output, batch_first=True)
 
-        return {'output': output, 'states': states}
+        # print(output.size()) # [batch_size * no_sentences, max_len, hidden_dim]
 
-        return {"logits": self.classification_head(sentemb)}
+        # create batch for instance lstm
+        last_states = output[:, -1, :] # [batch_size * no_sentences, hidden_dim]
+        instance_batch = last_states.view(batch_size, no_sentences, self.hidden_dim) # [batch_size, no_sentences, hidden_dim]
 
-    def loss(self, predictions: dict, targets: dict) -> torch.tensor:
+        # run instance lstm
+        outputs, _ = self.instance_lstm(instance_batch)  # [batch_size, no_sentences, hidden_dim]
+
+        instance_encoding = outputs[:, -1, :]  # [batch_size, hidden_dim]
+        batch_output = self.instance_mlp(instance_encoding.squeeze())  # [batch_size, output_size]
+
+        #input("asdA")
+
+
+        """ 
+        sentence_hidden_states = []
+        for instance_index, instance in enumerate(inputs): # inputs is a list of batch_size elements of strings
+            # run individual sentences
+            no_sentences = instance.size(0)
+            max_len = instance.size(1)
+            embeddings = self.dropout(self.embedding(instance)) # [no_sentences, max_len, emb_dim]
+            outputs, _ = self.sentence_lstm(embeddings) # output is [no_sentences, max_len, hidden_dim] , i.e. (batch, seq_len, num_directions * hidden_size)
+            last_hidden_states = outputs[:, -1, :].unsqueeze(0) # [1, no_sentences, hidden_dim]
+            sentence_hidden_states.append(last_hidden_states)
+        sentence_hidden_states = torch.cat(sentence_hidden_states, dim=0) # [batch_size, no_sentences, hidden_dim]
+
+        outputs, _ = self.instance_lstm(sentence_hidden_states)  # [batch_size, no_sentences, hidden_dim]
+
+        instance_encoding = outputs[:, -1, :]  # [batch_size, hidden_dim]
+        batch_output = self.instance_mlp(instance_encoding.squeeze())  # [batch_size, output_size]
+
         """
-        Computes Loss value according to a loss function.
-        :param predictions: model specific output. Must contain a key 'logits' with
-            a tensor [batch_size x 1] with model predictions
-        :param labels: Label values [batch_size]
-
-        Returns:
-            torch.tensor with loss value.
+        #print(batch_output.size())
+        #input("Asdasd")
         """
-        return self._loss(predictions["logits"], targets["labels"])
+        # pack padded sequences
+        pack_padded_lstm_input = torch.nn.utils.rnn.pack_padded_sequence(embeddings, X_lengths, batch_first=True, enforce_sorted=False)
 
-    def prepare_sample(self, sample: list, prepare_target: bool = True) -> (dict, dict):
-        """
-        Function that prepares a sample to input the model.
-        :param sample: list of dictionaries.
+        # now run through LSTM
+        pack_padded_lstm_output, states = self.lstm(pack_padded_lstm_input)
         
-        Returns:
-            - dictionary with the expected model inputs.
-            - dictionary with the expected target labels.
+        # undo the packing operation
+        output, _ = torch.nn.utils.rnn.pad_packed_sequence(pack_padded_lstm_output, batch_first=True)   
         """
-        sample = collate_tensors(sample)
-        tokens, lengths = self.tokenizer.batch_encode(sample["text"])
 
-        inputs = {"tokens": tokens, "lengths": lengths}
+        """ 
+            #states = torch.zeros(1, len(instance), self.hidden_dim)
+            states = []
+            for i, sentence in enumerate(instance): # sentence is a string (a sentence)
+                # Creates the embeddings and adds dropout. [1, seq_len] -> [1, seq_len, emb_dim].
+                tsentence = torch.tensor([sentence]) #[1, seq_len]
+                embeddings = self.dropout(self.embedding(tsentence))
 
-        if not prepare_target:
-            return inputs, {}
+                # [1, seq_len, emb_dim] -> [1, 1, 512]
+                outputs, _ = self.sentence_lstm(embeddings) # output is [1,2,512] -> (
+                last_hidden = outputs[:, -1, :] # [batch_size=1, hidden]
+                #states[:, i, :] = last_hidden
+                states.append(last_hidden.unsqueeze(1))
 
-        # Prepare target:
-        targets = {"labels": self.label_encoder.batch_encode(sample["label"])}
-        return inputs, targets
+            # run through instance lstm
+            states = torch.cat(states, dim=1)
+
+            outputs, _ = self.instance_lstm(states) # [1, 9, 512]
+            #print(outputs.size())
+            instance_encoding = outputs[:,-1,:] # [batch_size=1, hidden]
+            output_mlp = self.instance_mlp(instance_encoding.squeeze()) # [output_size]
+            #batch_output[instance_index,:] = output_mlp
+            batch_output.append(output_mlp.unsqueeze(0))
+        batch_output = torch.cat(batch_output, dim=0)
+        # print(batch_output.size())
+        """
+        return batch_output
+
+
+
+    def loss(self, prediction, target) -> torch.tensor:
+        # prediction is a [batch_size, output_size]
+        # target is a [batch_size, output_size]
+
+        return self._loss(prediction, target)
+
+    def prepare_sample(self, inputs: list) -> (list, list):
+        """print("prepare sample")
+        for x in inputs:
+            print(x)
+        print("_"*10)
+        """
+        #inputs is a list of tuples (x,y) with batch_size elements
+
+        x = [x[0] for x in inputs]
+        y = [x[1] for x in inputs]
+
+        batch_size = len(inputs)
+        no_of_sentences = len(x[0])
+
+        # get max lengths
+        max_len = 0
+        for instance in x:
+            max_len = max([max_len] + [len(sentence) for sentence in instance])
+
+        x_tensor = [] # should be [batch_size, no_of_sentences, max_len]
+        x_lengths = [] # tensor of [batch_size * no_of_sentences]
+        for instance in x:
+            instance_tensor = []
+            for sentence in instance:
+                sentence_len = len(sentence)
+                x_lengths.append(sentence_len)
+                padded_sentence = torch.tensor(sentence + [0] * (max_len - sentence_len), dtype=torch.long)
+                instance_tensor.append(padded_sentence.unsqueeze(0)) # lista cu [1, max_len]
+            instance_tensor = torch.cat(instance_tensor, dim=0) # [no_of_sentences, max_len]
+            x_tensor.append(instance_tensor.unsqueeze(0)) # list of [1, no_of_sentences, max_len]
+        x_tensor = torch.cat(x_tensor, dim=0) # [batch_size, no_of_sentences, max_len]
+
+        #print(x_tensor.size())
+
+        y_tensor = torch.tensor(y, dtype=torch.float)
+        return x_tensor, x_lengths, y_tensor
+
+        #input("Asd")
+
+        """ 
+        # x is a list of batch_size arrays of ints
+        # get max_size of elements and pad, for each x instance
+        x_tensor = []
+        for instance in x:
+            max_size = max([len(sentence) for sentence in instance])
+            no_of_sentences = len(instance)
+            # target is to create a [#_of_sentences, max_size] tensor padded with zero
+            instance_tensor = []
+            for sentence in instance:
+                padded_sentence = torch.tensor(sentence + [0]*(max_size-len(sentence)), dtype=torch.long)
+               
+                instance_tensor.append(padded_sentence.unsqueeze(0))
+            instance_tensor = torch.cat(instance_tensor, dim=0) # [no_of_sentences, max_size?? cum merg efectiv prin lstm??
+            x_tensor.append(instance_tensor)
+
+        y_tensor = torch.tensor(y, dtype=torch.float)
+        return x_tensor, y_tensor
+        """
 
     def training_step(self, batch: tuple, batch_nb: int, *args, **kwargs) -> dict:
-        """ 
-        Runs one training step. This usually consists in the forward function followed
-            by the loss function.
-        
-        :param batch: The output of your dataloader. 
-        :param batch_nb: Integer displaying which batch this is
+        x_tensor, x_lengths, y_tensor = batch
 
-        Returns:
-            - dictionary containing the loss and the metrics to be added to the lightning logger.
-        """
-        inputs, targets = batch
-        model_out = self.forward(**inputs)
-        loss_val = self.loss(model_out, targets)
-
-        # in DP mode (default) make sure if result is scalar, there's another dim in the beginning
-        if self.trainer.use_dp or self.trainer.use_ddp2:
-            loss_val = loss_val.unsqueeze(0)
+        model_out = self.forward(x_tensor, x_lengths)
+        loss_val = self.loss(model_out, y_tensor)
 
         tqdm_dict = {"train_loss": loss_val}
         output = OrderedDict(
@@ -155,32 +231,12 @@ class StyleEstimator(pl.LightningModule):
         return output
 
     def validation_step(self, batch: tuple, batch_nb: int, *args, **kwargs) -> dict:
-        """ Similar to the training step but with the model in eval mode.
+        x_tensor, x_lengths, y_tensor = batch
 
-        Returns:
-            - dictionary passed to the validation_end function.
-        """
-        inputs, targets = batch
-        model_out = self.forward(**inputs)
-        loss_val = self.loss(model_out, targets)
+        model_out = self.forward(x_tensor, x_lengths)
+        loss_val = self.loss(model_out, y_tensor)
 
-        y = targets["labels"]
-        y_hat = model_out["logits"]
-
-        # acc
-        labels_hat = torch.argmax(y_hat, dim=1)
-        val_acc = torch.sum(y == labels_hat).item() / (len(y) * 1.0)
-        val_acc = torch.tensor(val_acc)
-
-        if self.on_gpu:
-            val_acc = val_acc.cuda(loss_val.device.index)
-
-        # in DP mode (default) make sure if result is scalar, there's another dim in the beginning
-        if self.trainer.use_dp or self.trainer.use_ddp2:
-            loss_val = loss_val.unsqueeze(0)
-            val_acc = val_acc.unsqueeze(0)
-
-        output = OrderedDict({"val_loss": loss_val, "val_acc": val_acc,})
+        output = OrderedDict({"val_loss": loss_val})
 
         # can also return just a scalar instead of a dict (return loss_val)
         return output
@@ -197,7 +253,6 @@ class StyleEstimator(pl.LightningModule):
         # return torch.stack(outputs).mean()
 
         val_loss_mean = 0
-        val_acc_mean = 0
         for output in outputs:
             val_loss = output["val_loss"]
 
@@ -206,16 +261,8 @@ class StyleEstimator(pl.LightningModule):
                 val_loss = torch.mean(val_loss)
             val_loss_mean += val_loss
 
-            # reduce manually when using dp
-            val_acc = output["val_acc"]
-            if self.trainer.use_dp or self.trainer.use_ddp2:
-                val_acc = torch.mean(val_acc)
-
-            val_acc_mean += val_acc
-
         val_loss_mean /= len(outputs)
-        val_acc_mean /= len(outputs)
-        tqdm_dict = {"val_loss": val_loss_mean, "val_acc": val_acc_mean}
+        tqdm_dict = {"val_loss": val_loss_mean}
         result = {
             "progress_bar": tqdm_dict,
             "log": tqdm_dict,
@@ -224,49 +271,34 @@ class StyleEstimator(pl.LightningModule):
         return result
 
     def configure_optimizers(self):
-        return torch.optim.Adam(self.parameters(), lr=0.02)
+        return torch.optim.Adam(self.parameters(), lr=0.002)
 
     def on_epoch_end(self):
         """ Pytorch lightning hook """
-        if self.current_epoch + 1 >= self.nr_frozen_epochs:
-            self.unfreeze_encoder()
-
-    def __retrieve_dataset(self, train=True, val=True, test=True):
-        """ Retrieves task specific dataset """
-        return sentiment_analysis_dataset(self.hparams, train, val, test)
-
+        pass
 
     def train_dataloader(self) -> DataLoader:
         """ Function that loads the train set. """
-        self._train_dataset = self.__retrieve_dataset(val=False, test=False)[0]
+        self._train_dataset = MyDataset(folder_path="data/gsts", train=True)
         return DataLoader(
             dataset=self._train_dataset,
             sampler=RandomSampler(self._train_dataset),
             batch_size=self.hparams.batch_size,
             collate_fn=self.prepare_sample,
-            num_workers=self.hparams.loader_workers,
+            num_workers=2 #self.hparams.loader_workers,
         )
 
 
     def val_dataloader(self) -> DataLoader:
         """ Function that loads the validation set. """
-        self._dev_dataset = self.__retrieve_dataset(train=False, test=False)[0]
+        self._dev_dataset = MyDataset(folder_path="data/gsts", valid=True)
+        #print(self._dev_dataset.xs[0])
+        #print(self._dev_dataset.ys[0])
         return DataLoader(
             dataset=self._dev_dataset,
             batch_size=self.hparams.batch_size,
             collate_fn=self.prepare_sample,
-            num_workers=self.hparams.loader_workers,
-        )
-
-
-    def test_dataloader(self) -> DataLoader:
-        """ Function that loads the validation set. """
-        self._test_dataset = self.__retrieve_dataset(train=False, val=False)[0]
-        return DataLoader(
-            dataset=self._test_dataset,
-            batch_size=self.hparams.batch_size,
-            collate_fn=self.prepare_sample,
-            num_workers=self.hparams.loader_workers,
+            num_workers=2 #self.hparams.loader_workers,
         )
 
     @classmethod
