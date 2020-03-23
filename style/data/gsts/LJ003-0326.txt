@@ -1,1 +1,0 @@
-so that the various classes might be seated separately, and so as not to see each other.

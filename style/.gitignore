@@ -1,0 +1,5 @@
+.idea/
+.DS_Store
+experiments/
+__pycache__/
+temp.txt

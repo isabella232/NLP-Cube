@@ -1,1 +1,0 @@
-The general files of PRS consist of folders on individuals, card indexed by name.
