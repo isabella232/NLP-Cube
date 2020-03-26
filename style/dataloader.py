@@ -22,6 +22,8 @@ class MyDataset(Dataset):
                 self.xs = json.load(f)
             with open("data/train.y", "rb") as f:
                 self.ys = pickle.load(f)
+            self.xs = self.xs[:100]
+            self.ys = self.ys[:100]
             print("we have {} training instances.".format(len(self.xs)))
             return
         if valid:
@@ -29,6 +31,8 @@ class MyDataset(Dataset):
                 self.xs = json.load(f)
             with open("data/test.y", "rb") as f:
                 self.ys = pickle.load(f)
+            self.xs = self.xs[:50]
+            self.ys = self.ys[:50]
             print("we have {} validation instances.".format(len(self.xs)))
             return
 

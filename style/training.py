@@ -1,7 +1,7 @@
 """
 Runs a model on a single node across N-gpus.
 """
-import os
+import os, logging
 
 from model import StyleEstimator
 from pytorch_lightning import Trainer
@@ -33,6 +33,8 @@ def main(hparams) -> None:
     # ------------------------
     # 3 INIT TRAINER
     # ------------------------
+    #from pytorch_lightning.profiler import AdvancedProfiler
+    #profiler = AdvancedProfiler(output_filename="prof.txt")
     trainer = Trainer(
         logger=setup_testube_logger(),
         checkpoint_callback=True,
@@ -46,6 +48,7 @@ def main(hparams) -> None:
         accumulate_grad_batches=hparams.accumulate_grad_batches,
         log_gpu_memory=hparams.log_gpu_memory,
         val_percent_check=hparams.val_percent_check,
+        profiler=True
     )
 
     # --------------------------------
@@ -104,7 +107,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--patience",
-        default=3,
+        default=1,
         type=int,
         help="Number of epochs with no improvement \
             after which training will be stopped.",
@@ -124,7 +127,7 @@ if __name__ == "__main__":
 
     # Batching
     parser.add_argument(
-        "--batch_size", default=4, type=int, help="Batch size to be used."
+        "--batch_size", default=8, type=int, help="Batch size to be used."
     )
     parser.add_argument(
         "--accumulate_grad_batches",
