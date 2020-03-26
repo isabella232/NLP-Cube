@@ -11,6 +11,7 @@ from utils import setup_testube_logger
 
 
 def main(hparams) -> None:
+    logging.basicConfig(level=logging.DEBUG)
     """
     Main training routine specific for this project
     :param hparams:
@@ -175,3 +176,6 @@ if __name__ == "__main__":
     # RUN TRAINING
     # ---------------------
     main(hparams)
+    import sys
+    sys.stdout.flush()
+    sys.stderr.flush()

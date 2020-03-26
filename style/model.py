@@ -48,7 +48,7 @@ class StyleEstimator(pl.LightningModule):
         self.instance_mlp = nn.Linear(self.hidden_dim, self.output_dim)
 
         # Loss criterion initialization.
-        self._loss = nn.MSELoss(reduction="none")
+        self._loss = nn.MSELoss()#reduction="none"
 
     def forward(self, x_tensor, x_lengths):
         #batch_output = torch.zeros(len(inputs), self.output_dim) # [batch_size, output_size]
@@ -157,7 +157,9 @@ class StyleEstimator(pl.LightningModule):
         # prediction is a [batch_size, output_size]
         # target is a [batch_size, output_size]
 
-        return self._loss(prediction, target)
+        lss = self._loss(prediction, target)
+        #print(lss.size())
+        return lss
 
     def prepare_sample(self, inputs: list) -> (list, list):
         """print("prepare sample")
