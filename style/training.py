@@ -108,7 +108,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--patience",
-        default=1,
+        default=50,
         type=int,
         help="Number of epochs with no improvement \
             after which training will be stopped.",
@@ -121,7 +121,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--max_epochs",
-        default=20,
+        default=20000,
         type=int,
         help="Limits training to a max number number of epochs",
     )
@@ -139,7 +139,7 @@ if __name__ == "__main__":
     )
 
     # gpu args
-    parser.add_argument("--gpus", type=int, default=0, help="How many gpus")
+    parser.add_argument("--gpus", type=int, default=1, help="How many gpus")
     parser.add_argument(
         "--distributed_backend",
         type=str,

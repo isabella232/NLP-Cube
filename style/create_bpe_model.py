@@ -77,8 +77,6 @@ print("Decode with bos/eos: [{}]".format(recreated_string))
 recreated_string = lookup.decode(token_ids, skip_bos_eos_tokens=True)
 print("Decode w/o  bos/eos: [{}]".format(recreated_string))
 
-
-
 # create training data
 print("Creating training data...")
 X = []

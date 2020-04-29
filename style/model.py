@@ -8,12 +8,12 @@ import torch.nn as nn
 from torch import optim
 from torch.utils.data import DataLoader, RandomSampler
 from transformers import BertModel, get_constant_schedule_with_warmup
-from lookup import Lookup
 import pytorch_lightning as pl
-from dataloader import MyDataset
 from test_tube import HyperOptArgumentParser
-from utils import mask_fill
 
+from .utils import mask_fill
+from .lookup import Lookup
+from .dataloader import MyDataset
 
 class StyleEstimator(pl.LightningModule):
     """
@@ -27,8 +27,8 @@ class StyleEstimator(pl.LightningModule):
         self.hparams = hparams
         self.batch_size = hparams.batch_size
 
-        self.lookup = Lookup(type="bpe")
-        self.lookup.load(file_prefix="lookup/bpe/tok")
+        #self.lookup = Lookup(type="bpe")
+        #self.lookup.load(file_prefix="lookup/bpe/tok")
 
         # build model
 
@@ -150,8 +150,6 @@ class StyleEstimator(pl.LightningModule):
         # print(batch_output.size())
         """
         return batch_output
-
-
 
     def loss(self, prediction, target) -> torch.tensor:
         # prediction is a [batch_size, output_size]
@@ -289,7 +287,7 @@ class StyleEstimator(pl.LightningModule):
             sampler=RandomSampler(self._train_dataset),
             batch_size=self.hparams.batch_size,
             collate_fn=self.prepare_sample,
-            num_workers=2 #self.hparams.loader_workers,
+            num_workers=self.hparams.loader_workers,
         )
 
 
@@ -302,7 +300,7 @@ class StyleEstimator(pl.LightningModule):
             dataset=self._dev_dataset,
             batch_size=self.hparams.batch_size,
             collate_fn=self.prepare_sample,
-            num_workers=2 #self.hparams.loader_workers,
+            num_workers=self.hparams.loader_workers,
         )
 
     @classmethod
